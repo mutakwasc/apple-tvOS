@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The screen under the player stays put while it slides. -->
+<translate xmlns:android="http://schemas.android.com/apk/res/android"
+    android:duration="450"
+    android:fromYDelta="0"
+    android:toYDelta="0" />

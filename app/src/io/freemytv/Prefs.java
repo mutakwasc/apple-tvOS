@@ -85,8 +85,13 @@ final class Prefs {
     static final int KEY_JVC_SHORTCUT = 200_383, KEY_JVC_SETTINGS = KeyEvent.KEYCODE_NOTIFICATION;
     static final String TV_SHORTCUTS = HomeMode.PKG + "#tvshortcuts";
     static final String QUICK_SETTINGS = HomeMode.PKG + "#quicksettings";
+    /** Skyworth's Google TV set: its gear and its four colour buttons (SkyworthRemote.googleTv). */
+    static final int KEY_SW_SETTINGS = KeyEvent.KEYCODE_NOTIFICATION, KEY_SW_RED = KeyEvent.KEYCODE_PROG_RED,
+            KEY_SW_GREEN = KeyEvent.KEYCODE_PROG_GREEN, KEY_SW_YELLOW = KeyEvent.KEYCODE_PROG_YELLOW,
+            KEY_SW_BLUE = KeyEvent.KEYCODE_PROG_BLUE;
     static final int[] KEYS = RemoteKeys.GOOGLE_STREAMER
             ? new int[] {KEY_GOOGLE_YOUTUBE, KEY_GOOGLE_NETFLIX, KEY_GOOGLE_CUSTOM}
+            : RemoteKeys.SKYWORTH_GTV ? new int[] {KEY_SW_SETTINGS, KEY_SW_RED, KEY_SW_GREEN, KEY_SW_YELLOW, KEY_SW_BLUE}
             : RemoteKeys.JVC_SKYWORTH ? new int[] {KEY_JVC_SHORTCUT, KEY_JVC_SETTINGS}
             : RemoteKeys.HISENSE ? new int[] {KEY_HISENSE_PRIME, KEY_HISENSE_YOUTUBE, KEY_HISENSE_DISNEY,
                     KEY_HISENSE_APPS, KEY_HISENSE_SETTINGS, KEY_HISENSE_PROFILE}
@@ -260,7 +265,7 @@ final class Prefs {
     static void setTheme(String v) { put("theme", v); }
 
     /** Wi-Fi/Ethernet, Bluetooth and USB icons at the top-left of the home screen. */
-    static boolean statusIcons() { return sp().getBoolean("statusicons", false); }
+    static boolean statusIcons() { return sp().getBoolean("statusicons", true); }
     static void setStatusIcons(boolean on) { put("statusicons", on); }
 
     // MARK: - City
@@ -282,22 +287,39 @@ final class Prefs {
     static boolean saverWatch() { return sp().getBoolean("saverWatch", false); }
     static void setSaverWatch(boolean on) { put("saverWatch", on); }
 
+    /**
+     * Screensaver style: "classic" (the picks under the glass clock), "ambient" (the picks under a small clock),
+     * "custom" (your own photos) or "cozy" (Cozy Nights: the fireplace video, CozyView).
+     */
+    static final String[] SAVER_STYLES = {"classic", "ambient", "custom", "cozy"};
+    static String saverStyle() {
+        String s = sp().getString("saverStyle", "classic");
+        return java.util.Arrays.asList(SAVER_STYLES).contains(s) ? s : "classic";
+    }
+    static void setSaverStyle(String style) { put("saverStyle", style); }
+
+    /** The music widget (icon, song, progress) under the screensaver's clock; Cozy Nights has its own corner card. */
+    static boolean saverMusic() { return sp().getBoolean("saverMusic", true); }
+    static void setSaverMusic(boolean on) { put("saverMusic", on); }
+
     // MARK: - Top of the home screen
 
     static final String TOP_PICKS = "picks", TOP_CONTINUE = "continue", TOP_NONE = "none";
-    static final String[] TOP_CONTENT = {TOP_PICKS, TOP_CONTINUE, TOP_NONE};
+    static final String[] TOP_CONTENT = {TOP_PICKS, TOP_NONE};
 
-    /** What the cards under the title show: the recommendations (TMDB), what you were watching in your apps, or nothing. */
+    /**
+     * What the top of the home screen shows: the recommendations (TMDB) or the clock. Continue Watching was a third
+     * choice; it's gone, and a TV that had it shows the clock.
+     */
     static String topContent() {
         String v = sp().getString("topContent", TOP_PICKS);
-        return v.equals(TOP_CONTINUE) || v.equals(TOP_NONE) ? v : TOP_PICKS;
+        return v.equals(TOP_CONTINUE) || v.equals(TOP_NONE) ? TOP_NONE : TOP_PICKS;
     }
 
     static void setTopContent(String v) { put("topContent", v); }
 
-    /** Apps left out of Continue Watching (Settings), by package. */
+    /** Apps left out of the TV's Watch Next list (chosen in an earlier version's settings), by package. */
     static Set<String> watchOff() { return new HashSet<>(sp().getStringSet("watchOff", new HashSet<>())); }
-    static void setWatchOff(Set<String> packages) { putQuietly("watchOff", packages); }
 
     /** Single items hidden from Continue Watching (holding OK on a card), as WatchNext.hideKey. */
     static Set<String> watchHidden() { return new HashSet<>(sp().getStringSet("watchHidden", new HashSet<>())); }
@@ -343,28 +365,32 @@ final class Prefs {
     static boolean homeAssistant() { return sp().getBoolean("homeAssistant", false); }
     static void setHomeAssistant(boolean on) { put("homeAssistant", on); }
 
-    static boolean quotes() { return sp().getBoolean("quotes", Config.SHOW_CRYPTO); }
-    static void setQuotes(boolean on) { put("quotes", on); }
-
     /** Your photos (Photos, sent from a computer) on the screensaver and behind the home screen, once imported. */
     static boolean photos() { return sp().getBoolean("photos", true); }
     static void setPhotos(boolean on) { put("photos", on); }
 
     /**
-     * With an Immich server, where My Photos come from: "default" (none of yours: the picks' photos, as without
-     * Immich), "immich" (all its photos) or "album" (photoAlbum, its id; photoAlbumName to show).
+     * Where Immich's photos come from (ImmichPhotos, for the screensaver's Custom style): "immich" (all of them) or
+     * "album" (photoAlbum, its id), as set before the choice left Home Settings.
      */
     static String photoSource() { return sp().getString("photoSource", "immich"); }
     static String photoAlbum() { return sp().getString("photoAlbum", ""); }
-    static String photoAlbumName() { return sp().getString("photoAlbumName", ""); }
 
-    static void setPhotoSource(String source, String album, String name) {
-        sp().edit().putString("photoSource", source).putString("photoAlbum", album).putString("photoAlbumName", name).apply();
-        version++;
+    /**
+     * The home screen's wallpaper (Home Settings > Wallpaper): "default" (the moving wave, AuraWave), "web" (Gallery's
+     * pictures) or "nowplaying" (what plays, then what played lately). Your own photos are the screensaver's only.
+     */
+    static String wallpaper() {
+        String w = sp().getString("wallpaper", null);
+        if (w != null) return w;
+        String old = photoSource();   // chosen in My Photos, before the wallpaper had its own setting
+        return "web".equals(old) || "nowplaying".equals(old) ? old : "default";
     }
 
-    static boolean coin(int i) { return sp().getBoolean("coin" + i, true); }
-    static void setCoin(int i, boolean on) { put("coin" + i, on); }
+    static void setWallpaper(String wallpaper) {
+        sp().edit().putString("wallpaper", wallpaper).apply();
+        version++;
+    }
 
     /**
      * Also list the TV's own system apps (Settings, Files, the manufacturer's apps) in All Apps and the shelf editor.
@@ -464,6 +490,8 @@ final class Prefs {
             if (keyCode == KEY_JVC_SHORTCUT) return TV_SHORTCUTS;
             return keyCode == KEY_JVC_SETTINGS ? QUICK_SETTINGS : "";
         }
+        // The gear slides our quick panel out; the colour buttons do nothing until an app is picked.
+        if (RemoteKeys.SKYWORTH_GTV) return keyCode == KEY_SW_SETTINGS ? QUICK_PANEL : "";
         if (RemoteKeys.SONY) {
             if (!sonyGoogleTv()) return "";   // "Sony default": Sony's own receiver opens it
             switch (keyCode) {

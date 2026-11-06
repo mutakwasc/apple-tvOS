@@ -69,6 +69,18 @@ final class Backdrop {
         nightImage = nightBg == null ? null : Bitmap.createBitmap(nightBg, bw, bh, Bitmap.Config.ARGB_8888);
     }
 
+    /** A full-resolution background (Now Playing, web wallpapers): drawn pixel for pixel, never stretched up. */
+    private Backdrop(int[] frost, int[] glass, Bitmap lightImage, Bitmap nightImage) {
+        image = null;
+        this.frost = frost;
+        this.glass = glass;
+        wide = null;
+        wideShader = null;
+        light = lightGlass = nightFrost = nightGlass = null;
+        this.lightImage = lightImage;
+        this.nightImage = nightImage;
+    }
+
     static Backdrop make(Bitmap src, boolean forLight) {
         return make(src, forLight, false);
     }
@@ -136,6 +148,115 @@ final class Backdrop {
         int[] frost = reduce(out, FW, FH, 3, 3);
         int[] glass = reduce(out, GW, GH, 2, 2);
         return new Backdrop(gpu(out), frost, glass, null, null, null, null, null);
+    }
+
+    /**
+     * Now-playing: album art visible in the top-right corner, dark everywhere else. The dark fades in from the left
+     * (covering the clock area) and from the bottom (covering the shelf), so the art sits like a spotlight in the
+     * top-right.
+     */
+    /** `left`: where the art starts, as a fraction of the width (where the clock's hour starts). */
+    static Backdrop nowPlaying(Bitmap src, float left) {
+        // Sample dominant color from the art (average of a small downscale)
+        Bitmap tiny = Ui.downscale(src, 8, 8);
+        long rSum = 0, gSum = 0, bSum = 0;
+        int n = tiny.getWidth() * tiny.getHeight();
+        for (int y = 0; y < tiny.getHeight(); y++) {
+            for (int x = 0; x < tiny.getWidth(); x++) {
+                int px = tiny.getPixel(x, y);
+                rSum += (px >> 16) & 255;
+                gSum += (px >> 8) & 255;
+                bSum += px & 255;
+            }
+        }
+        if (tiny != src) tiny.recycle();
+        // Dark tint: the art's hue at ~12% brightness
+        int tintR = Math.round(rSum * 0.12f / n);
+        int tintG = Math.round(gSum * 0.12f / n);
+        int tintB = Math.round(bSum * 0.12f / n);
+        int tint = 0xFF000000 | (tintR << 16) | (tintG << 8) | tintB;
+
+        Bitmap out = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(out);
+        c.drawColor(tint);
+        // The art fills everything from the clock's hour rightward, cropped to that area: a tall or square picture
+        // keeps its upper part (faces sit there more than at the bottom).
+        float artLeft = W * Math.max(0.02f, Math.min(0.6f, left));
+        float artW = W - artLeft;
+        float dstRatio = artW / H, srcRatio = (float) src.getWidth() / src.getHeight();
+        int sx = 0, sy = 0, sw = src.getWidth(), sh = src.getHeight();
+        if (srcRatio > dstRatio) {
+            sw = Math.round(sh * dstRatio);
+            sx = (src.getWidth() - sw) / 2;
+        } else {
+            sh = Math.round(sw / dstRatio);
+            sy = Math.round((src.getHeight() - sh) * 0.3f);
+        }
+        c.drawBitmap(src, new android.graphics.Rect(sx, sy, sx + sw, sy + sh),
+                new android.graphics.RectF(artLeft, 0, W, H), new Paint(Paint.FILTER_BITMAP_FLAG));
+        src.recycle();
+        Paint scrim = new Paint(Paint.DITHER_FLAG);
+        int tintA = tint | 0xFF000000;
+        int tintClear = tint & 0x00FFFFFF;
+        // Elliptical fade from the top-right corner: as wide as the art (the tint where the hour starts), not quite as
+        // tall as the screen (the tint behind the shelf), so no straight edge shows anywhere.
+        float radius = artW;
+        android.graphics.RadialGradient fade = new android.graphics.RadialGradient(W, 0, radius,
+                new int[] {tintClear, tintClear, (0x40 << 24) | tintClear, (0xB3 << 24) | tintClear, tintA},
+                new float[] {0, 0.45f, 0.65f, 0.85f, 1}, Shader.TileMode.CLAMP);
+        android.graphics.Matrix squash = new android.graphics.Matrix();
+        squash.setScale(1, H * 1.05f / radius, W, 0);
+        fade.setLocalMatrix(squash);
+        scrim.setShader(fade);
+        c.drawRect(0, 0, W, H, scrim);
+        // Light top scrim for the buttons row.
+        scrim.setShader(new LinearGradient(0, 0, 0, H * 0.1f,
+                new int[] {(0x4D << 24) | tintClear, tintClear}, null, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, W, H * 0.1f, scrim);
+
+        int[] frost = reduce(out, FW, FH, 3, 3);
+        int[] glass = reduce(out, GW, GH, 2, 2);
+        // Dark already: the night background is the same picture (one full-size copy, not two).
+        return new Backdrop(frost, glass, out, out);
+    }
+
+    /**
+     * Web wallpaper: full resolution, minimal processing. A subtle scrim on the left for text readability and at the
+     * bottom for the shelf, but no blur — the photo shows crisp.
+     */
+    static Backdrop wallpaper(Bitmap src) {
+        Bitmap crop = center(src, (float) W / H);
+        if (crop != src) src.recycle();
+        Bitmap out = Ui.downscale(crop, W, H);
+        if (out != crop) crop.recycle();
+        if (!out.isMutable()) {
+            Bitmap copy = out.copy(Bitmap.Config.ARGB_8888, true);
+            out.recycle();
+            out = copy;
+        }
+        Canvas c = new Canvas(out);
+        Paint scrim = new Paint(Paint.DITHER_FLAG);
+        // Gentle left scrim for clock/text readability
+        scrim.setShader(new LinearGradient(0, 0, W * 0.45f, 0,
+                new int[] {black(0.55f), black(0.3f), black(0.08f), 0},
+                new float[] {0, 0.3f, 0.7f, 1}, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, W, H, scrim);
+        // Bottom scrim for the shelf
+        scrim.setShader(new LinearGradient(0, H, 0, H * 0.55f,
+                new int[] {black(0.5f), black(0.22f), 0},
+                new float[] {0, 0.5f, 1}, Shader.TileMode.CLAMP));
+        c.drawRect(0, H * 0.55f, W, H, scrim);
+        // Top scrim for buttons
+        scrim.setShader(new LinearGradient(0, 0, 0, H * 0.18f, new int[] {black(0.3f), 0},
+                new float[] {0, 1}, Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, W, H * 0.18f, scrim);
+
+        int[] frost = reduce(out, FW, FH, 3, 3);
+        int[] glass = reduce(out, GW, GH, 2, 2);
+        // At night, the same blend toward near-black that darken() makes, at full size.
+        Bitmap night = out.copy(Bitmap.Config.ARGB_8888, true);
+        new Canvas(night).drawColor(Math.round(0.35f * 255) << 24 | 0x0B0B0D);
+        return new Backdrop(frost, glass, out, night);
     }
 
     /** How many times smaller the screensaver photo's frosted version is (the glass math uses the same number). */

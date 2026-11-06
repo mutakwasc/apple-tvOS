@@ -61,30 +61,10 @@ final class HomeData {
     private static final long PRICES_EVERY = 5 * 60_000L, WEATHER_EVERY = 30 * 60_000L;
     interface Listener { void onData(); }
 
-    /** BTC, ETH and SOL; in Brazilian reais also the dollar (USDT/BRL), which Binance doesn't list for most currencies. */
-    static int coinCount() {
-        return Prefs.quotes() ? active().length : 0;
-    }
+    static int coinCount() { return 0; }
 
-    private static volatile int[] activeCoins;
-    private static volatile int activeVersion = -1;
-    private static volatile boolean activeInDollars;
-
-    /** Indexes in COINS of the coins the user has on (and that Binance lists in this currency). */
-    static int[] active() {
-        int[] a = activeCoins;
-        boolean dollars = inDollars;
-        if (a != null && activeVersion == Prefs.version && activeInDollars == dollars) return a;
-        int n = 0;
-        int[] tmp = new int[COINS.length];
-        // The dollar only in reais, not in dollars: USDTUSDT isn't a pair, and Binance would refuse the whole request.
-        for (int i = 0; i < COINS.length; i++) if (Prefs.coin(i) && (i < 3 || CURRENCY.equals("BRL") && !dollars)) tmp[n++] = i;
-        a = java.util.Arrays.copyOf(tmp, n);
-        activeCoins = a;
-        activeVersion = Prefs.version;
-        activeInDollars = dollars;
-        return a;
-    }
+    private static final int[] NO_COINS = new int[0];
+    static int[] active() { return NO_COINS; }
 
     /** Settings changed (city, coins): fetch again now. */
     void settingsChanged() {
@@ -177,11 +157,6 @@ final class HomeData {
         cache = c.getSharedPreferences("homedata", Context.MODE_PRIVATE);
         inDollars = CURRENCY.equals(cache.getString("dollarsFor", ""));
         try {
-            if (Prefs.quotes()) {
-                String p = cache.getString("prices", null);
-                if (p != null) parsePrices(p);
-                pricesAt = cache.getLong("pricesAt", 0);
-            }
             String w = cache.getString("weather", null);
             // The cached forecast is for the city it was fetched for; another city means fetch again.
             if (w != null && weatherPlace().equals(cache.getString("weatherPlace", ""))) {

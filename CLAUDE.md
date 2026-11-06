@@ -307,12 +307,18 @@ entries; its system pieces are in `PROTECTED`. USB debugging opens ADB on 5555 t
   `/status/`), on Google TV and Android TV only.
   On LG and Samsung it's typed in Home Settings (no QR: a web app can't serve a page): `Prefs.tmdbKey()` (localStorage)
   wins over `CONFIG.tmdbKey`, and `Data.keyChanged()` fetches the picks again.
-- Continue Watching gets `READ_TV_LISTINGS` with `pm grant` through the TV's own ADB only when picked in Home Settings;
-  *Original* revokes it with `pm revoke`. Watch Next pictures load only from the TV (`content://`, `android.resource://`),
-  never from the network. The app talks only to TMDB, Open-Meteo, Binance, Watchmode (with a `watchmode_key`), your Plex
+- The top of the home screen is Picks or the Clock (Continue Watching is gone; a TV that had it shows the clock). With
+  the picks, the background is always the moving wave (`AuraWave`); the Wallpaper (`Prefs.wallpaper`: Default = the
+  wave, Web, Now Playing) is the clock's. Your own photos are the screensaver's only (Custom style).
+- Recently Played (Now Playing wallpaper) reads the TV's Watch Next list (Netflix's titles), so `READ_TV_LISTINGS` is
+  granted with `pm grant` through the TV's own ADB when that wallpaper is picked; *Original* revokes it with `pm revoke`.
+  The app talks only to TMDB, Open-Meteo, Binance, Watchmode (with a `watchmode_key`), your Plex
   server (with a `plex_url`), your Immich server (with `immich_server` and its key), Trakt (with a `trakt_client_id`,
-  once the person signs in on the TV) and GitHub's releases (Updates): new sources (such as Stremio) must not add
-  network calls without the owner's OK.
+  once the person signs in on the TV), GitHub's releases (Updates) and, for Recently Played on the Now Playing
+  wallpaper, the picture a video app links to for what was watched (`Recently.download`: https only, no redirects, an
+  image under 4 MB, kept 4 days; Netflix's Watch Next posters), and for YouTube, whose session carries no picture, its
+  search page for the video's title and channel and the first result's thumbnail on `i.ytimg.com`
+  (`Recently.youtubeThumbnail`): new sources (such as Stremio) must not add network calls without the owner's OK.
 - Trakt (`Trakt`, Google TV only) needs the person's own API app: `trakt_client_id` (the Client ID only: device code
   with PKCE, so no secret is built in). Until they sign in on the Picks screen, nothing talks to `api.trakt.tv`. The
   tokens stay in `:home`'s private `trakt` preferences, are never logged and never follow a redirect, and only `:home`
@@ -429,6 +435,11 @@ entries; its system pieces are in `PROTECTED`. USB debugging opens ADB on 5555 t
   (`Prefs.TV_SHORTCUTS`) and the gear our own small Quick Settings panel (`QuickSettingsActivity`). Leaving Google TV's
   home app on is no way around it there: its Home priority wins over ours. `tools/test-remote.sh` (run by
   `tools/check.sh`) checks which TVs and keys match.
+  Skyworth's own Google TV set (`RemoteKeys.SKYWORTH_GTV`: model `SWTV-22AE`, device `SW6H`, Google TV 14 tested;
+  `SkyworthRemote.googleTv`) has a Bluetooth remote (`Vendor_1d5a_Product_c580.kl`) whose gear sends `KEYCODE_NOTIFICATION`,
+  caught by the system before any window (the filter sees it first), and four colour buttons, `PROG_RED` to `PROG_BLUE`
+  (the remote sends yellow and blue swapped as Linux keys; the layout swaps them back), which reach the app in front. The
+  gear opens our quick panel by default (`Prefs.QUICK_PANEL`), the colour buttons nothing until an app is picked.
   `adb shell input keyevent` doesn't test any of these: injected keys skip the accessibility key filter.
 - Recent Apps (`RecentApps`, over a 96×54 `ScreenBlur` copy of the window) is off by default: *Home Settings* →
   *Recent Apps* (`Prefs.recents()`: `off`, `drawer`, `home`) adds the drawer shortcut and the app-switch key, and `home`
@@ -474,6 +485,15 @@ entries; its system pieces are in `PROTECTED`. USB debugging opens ADB on 5555 t
   Android 14) is still older than that uptime (a key moves it; a Changhong on
   MediaTek stamped it once at 23 s, Home came up at 26 s and its TV center took the screen at 27 s). An unreadable
   stamp counts as a key: nothing moves.
+- The music player (`MusicPlayerActivity`)'s visualiser reads the TV's sound output with Android's Visualizer on the
+  output mix (session 0), which needs `RECORD_AUDIO` (no microphone is opened): asked once with Android's prompt when
+  the player first opens, used only while it shows (released in `onPause`), and nothing is kept or sent. Denied, or
+  where the TV's audio bypasses the mixer (silence for 1.5 s), the spikes are animated instead.
+- Home Settings > Screensaver is a screen of its own: Style (`Prefs.SAVER_STYLES`: Classic and Ambient show the
+  picks, Custom your own photos, Cozy Nights `CozyView`: `res/raw/fireplace.mp4`, a short clip looped muted, with a
+  now-playing card in the corner), Show music player (the home screen's widget under the clock, in place of the prices),
+  Watch from the screensaver, and Time: 30 s to 5 min (`HomeMode.SAVER_TIMES`), written to the system's
+  `screen_off_timeout` (Android starts the screensaver then) through the TV's ADB, only those values.
 - *Status icons* (Home Settings, off by default): Wi-Fi or Ethernet, Bluetooth audio (A2DP and headset only: a
   Bluetooth remote is always connected) and a mounted removable drive. Nothing listens while the row is off; Android
   12+ asks for `BLUETOOTH_CONNECT` (*Nearby devices*) when it's turned on, and without it only that icon is missing.

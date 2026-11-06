@@ -104,9 +104,7 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
     private final HomeData data;
     private final Recs recs;
     private final NowPlaying.Watch playing;
-    private final TextPaint fit = new TextPaint();
-    private String playingCorner, playingBottom;
-    private float playingCornerWidth, playingBottomWidth, cornerCap, bottomCap, cornerBase;
+    private float cornerCap, cornerBase;
     // The bars before what's playing move on every frame (drawn over the recorded text, which stays still).
     private final Paint barPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF barRect = new RectF();
@@ -138,6 +136,22 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
     private Paint datePaint, clockPaint, weatherPaint, weatherDim, quotePaint, stalePaint;
     private Paint cornerDate, cornerQuote, cornerStale, cornerClock, labelPaint, metaPaint, hintPaint;
     private TextPaint titlePaint;
+    private boolean ambient, custom, web;
+    private Paint ambientClock, ambientDate, ambientWeather, progressPaint, progressTrack;
+    // The music widget under the clock (Screensaver > Show music player), as on the home screen: the app's icon, the
+    // song and the artist, then the progress bar and the times. It takes the prices' place.
+    private boolean musicOn;
+    private String musicLine;
+    private TextPaint musicPaint;
+    private Paint musicTime;
+    private final Paint musicTrack = new Paint(Paint.ANTI_ALIAS_FLAG), musicFill = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final AudioLevels audio = new AudioLevels();   // the bars follow the music where it can be read
+    private final RectF musicRect = new RectF();
+    private final StringBuilder musicTimeBuf = new StringBuilder(16);
+    private long musicSec = -1;
+    private String musicTimes = "";
+    private static final float MUSIC_W = 600, MUSIC_ICON = 44;
+    private static final int AL_LEFT = 0, AL_CENTER = 1, AL_RIGHT = 2;
 
     private final Runnable tick = new Runnable() {
         @Override public void run() {
@@ -179,6 +193,13 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
     void start() {
         if (running) return;
         running = true;
+        String style = Prefs.saverStyle();
+        custom = "custom".equals(style);
+        web = "ambient".equals(style);
+        ambient = web || custom;   // photos without a caption: the small clock suits them
+        // Ambient's web pictures: a new day's set when it's due (the first ones, if none came yet).
+        if (web) Gallery.syncIfDue(getContext(), () -> { if (running) prepareNext(); });
+        musicOn = Prefs.saverMusic();
         if (worker.isShutdown()) worker = Executors.newSingleThreadExecutor();
         startedAt = clock();
         lastFrame = 0;
@@ -193,6 +214,7 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
         prepareNext();
         handler.postDelayed(tick, 60_000);
         playing.start();
+        if (musicOn) audio.start(getContext());
         Choreographer.getInstance().postFrameCallback(this);
         invalidate();
     }
@@ -205,6 +227,7 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
         Choreographer.getInstance().removeFrameCallback(this);
         handler.removeCallbacks(tick);
         playing.stop();
+        audio.stop();
         data.removeListener(this);
         recs.removeListener(this);
         // The photos stay in GPU memory until the garbage collector runs: release them now (after the last frame).
@@ -266,6 +289,24 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
         metaPaint = Ui.text(Ui.medium, 29 * k, 0xC7FFFFFF);
         hintPaint = Ui.text(Ui.regular, 24 * k, 0x99FFFFFF);
         metaPaint.setLetterSpacing(0.014f);
+        // Ambient mode: minimal clock at bottom-left, progress line
+        ambientClock = Ui.numbers(Ui.digital, 120 * k, 0xF2FFFFFF);
+        ambientClock.setLetterSpacing(0.05f);
+        ambientClock.setShadowLayer(24 * k, 0, 3 * k, 0x88000000);
+        ambientDate = Ui.text(Ui.medium, 28 * k, 0xC7FFFFFF);
+        ambientDate.setShadowLayer(18 * k, 0, 2 * k, 0x66000000);
+        ambientWeather = Ui.numbers(Ui.regular, 26 * k, 0xA0FFFFFF);
+        ambientWeather.setShadowLayer(18 * k, 0, 2 * k, 0x66000000);
+        progressPaint = new Paint();
+        progressPaint.setColor(0xB3FFF4E6);
+        progressTrack = new Paint();
+        progressTrack.setColor(0x1FFFFFFF);
+        musicPaint = new TextPaint(Ui.text(Ui.medium, 28 * k, 0xF2FFFFFF));
+        musicPaint.setShadowLayer(18 * k, 0, 2 * k, 0x66000000);
+        musicTime = Ui.numbers(Ui.regular, 20 * k, 0xA6FFFFFF);
+        musicTime.setShadowLayer(14 * k, 0, 2 * k, 0x66000000);
+        musicTrack.setColor(0x40FFFFFF);
+        musicFill.setColor(0xE6FFFFFF);
         Symbols.warmWeather(getContext(), 30 * k);   // the corner's
         Symbols.warmWeather(getContext(), 32 * k);   // under the clock
         for (Paint p : new Paint[] {cornerDate, cornerQuote, cornerStale, cornerClock, labelPaint, titlePaint, metaPaint, barPaint}) {
@@ -280,9 +321,12 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
 
     // MARK: - Photos
 
-    /** Your photos when they are on, otherwise the picks'. */
+    /**
+     * Custom: your own photos; Ambient: the web wallpapers; Classic: the picks'. With none (yet), the clock over the
+     * aurora.
+     */
     private List<Recs.Pick> photos() {
-        return Photos.on(getContext()) ? Photos.picks(getContext()) : recs.showcase();
+        return custom ? Photos.picks(getContext()) : web ? Photos.webPicks(getContext()) : recs.showcase();
     }
 
     /** Loads the next photo in the background (one at a time); once ready, it comes in at the right moment. */
@@ -468,38 +512,75 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
             drawPhoto(canvas, incoming, placeB, e);
         }
 
-        if (chromeDirty) recordChrome();
-        chrome.setAlpha(first);
-        chrome.draw(canvas);
-        if (playingCorner != null) {
-            float x = RIGHT * k - playingCornerWidth - cornerCap * 0.6f - NowPlaying.barsWidth(cornerCap);
-            drawBars(canvas, x, cornerBase, cornerCap, cornerQuote.getColor(), first);
+        if (ambient) {
+            drawAmbientOverlay(canvas, first, up);
+        } else {
+            if (chromeDirty) recordChrome();
+            chrome.setAlpha(first);
+            chrome.draw(canvas);
+            drawMusic(canvas, RIGHT * k, cornerBase - cornerCap, AL_RIGHT, first);   // under the glass clock
+            drawGlass(canvas, first, e);
+            drawCaptions(canvas, up);
         }
-        drawGlass(canvas, first, e);
-        drawCaptions(canvas, up);
     }
 
-    /** What an app is playing, cut to fit the corner and the bottom line: once per title, not while recording. */
+    /**
+     * What an app is playing, for the music widget: the line cut to fit, once per song (not while
+     * drawing). Off in Screensaver settings: nothing of it shows.
+     */
     private void fitPlaying() {
         String now = playing.text;
-        if (now == null || quotePaint == null) {
-            playingCorner = playingBottom = null;
+        if (quotePaint == null) return;
+        cornerCap = Ui.cap(cornerQuote);
+        cornerBase = (CLOCK_TOP + Ui.cap(cornerClock) / k + QUOTES_GAP) * k;
+        if (!musicOn || now == null) {
+            musicLine = null;
             return;
         }
-        fit.set(cornerQuote);
-        playingCorner = TextUtils.ellipsize(now, fit, 860 * k, TextUtils.TruncateAt.END).toString();
-        playingCornerWidth = cornerQuote.measureText(playingCorner);
-        fit.set(quotePaint);
-        playingBottom = TextUtils.ellipsize(now, fit, w - 2 * MARGIN * k - 60 * k, TextUtils.TruncateAt.END).toString();
-        playingBottomWidth = quotePaint.measureText(playingBottom);
-        cornerCap = Ui.cap(cornerQuote);
-        bottomCap = Ui.cap(quotePaint);
-        cornerBase = (CLOCK_TOP + Ui.cap(cornerClock) / k + QUOTES_GAP) * k;
+        musicLine = TextUtils.ellipsize(now, musicPaint, (MUSIC_W - MUSIC_ICON - 14) * k, TextUtils.TruncateAt.END).toString();
     }
 
-    private void drawBars(Canvas c, float x, float base, float cap, int color, float alpha) {
-        barPaint.setColor(Ui.alpha(color, alpha));
-        NowPlaying.drawBars(c, x, base, cap, barPaint, true, barRect);
+    /**
+     * The music widget, its top at `top`, lined up with `x` on the `align` side: the level bars (moving with the
+     * music, as on the home screen) and the song, then (with a length) the bar and "02:30/04:10" under them. Each
+     * frame, as the bars and the time move; nothing made but the time once a second.
+     */
+    private void drawMusic(Canvas c, float x, float top, int align, float alpha) {
+        if (musicLine == null || alpha <= 0.01f) return;
+        float icon = MUSIC_ICON * k, gap = 14 * k, width = MUSIC_W * k;
+        float cap = Ui.cap(musicPaint) * 1.15f, bars = NowPlaying.barsWidth(cap);
+        float rowW = bars + gap + musicPaint.measureText(musicLine);
+        float rowX = align == AL_RIGHT ? x - rowW : align == AL_CENTER ? x - rowW / 2 : x;
+        float base = top + icon / 2 + Ui.halfCap(musicPaint);
+        barPaint.setColor(Ui.alpha(0xF2FFFFFF, alpha));
+        NowPlaying.drawBars(c, rowX, base, cap, barPaint, audio, barRect);
+        musicPaint.setAlpha(Math.round(242 * alpha));
+        c.drawText(musicLine, rowX + bars + gap, base, musicPaint);
+        long duration = playing.duration;
+        if (duration <= 0) return;
+        long elapsed = NowPlaying.position(playing);
+        if (elapsed / 1000 != musicSec) {
+            musicSec = elapsed / 1000;
+            musicTimeBuf.setLength(0);
+            NowPlaying.appendTimes(musicTimeBuf, elapsed, duration);
+            musicTimes = musicTimeBuf.toString();
+        }
+        float barY = top + icon + 18 * k, barH = 4 * k, timeW = musicTime.measureText(musicTimes);
+        float left = align == AL_RIGHT ? x - width : align == AL_CENTER ? x - width / 2 : x;
+        float barRight = left + width - timeW - 14 * k;
+        musicTrack.setAlpha(Math.round(64 * alpha));
+        musicFill.setAlpha(Math.round(230 * alpha));
+        musicRect.set(left, barY, barRight, barY + barH);
+        c.drawRoundRect(musicRect, barH / 2, barH / 2, musicTrack);
+        musicRect.right = left + (barRight - left) * Math.min(1, (float) elapsed / duration);
+        c.drawRoundRect(musicRect, barH / 2, barH / 2, musicFill);
+        musicTime.setAlpha(Math.round(166 * alpha));
+        c.drawText(musicTimes, barRight + 14 * k, barY + barH / 2 + Ui.halfCap(musicTime), musicTime);
+    }
+
+    /** The widget's height: the icon row, then the bar's. */
+    private float musicHeight() {
+        return (MUSIC_ICON + 18 + 4) * k + (playing.duration > 0 ? 8 * k : 0);
     }
 
     private static float fadeIn(long elapsed, long duration) {
@@ -587,8 +668,7 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
             float base = (CLOCK_TOP + Ui.cap(cornerClock) / k + QUOTES_GAP) * k;
             float cap = Ui.cap(cornerQuote), gap = 7 * k, spacing = 26 * k;
             int[] coins = HomeData.active();
-            int n = playingCorner != null ? 0 : HomeData.coinCount();   // what an app is playing takes their place
-            if (playingCorner != null) c.drawText(playingCorner, right - playingCornerWidth, base, cornerQuote);
+            int n = musicLine != null ? 0 : HomeData.coinCount();   // the music widget takes their place
             String[] values = new String[n];
             float[] glyphs = new float[n];
             float total = spacing * (n - 1);
@@ -797,6 +877,50 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
         }
     }
 
+    // MARK: - Ambient mode: minimal overlay with progress line
+
+    private void drawAmbientOverlay(Canvas canvas, float alpha, long up) {
+        if (alpha <= 0.01f) return;
+        float m = MARGIN * k;
+        // With the music widget, the clock and the date move up and it sits under them.
+        float music = musicLine != null ? musicHeight() + 30 * k : 0;
+        float bottom = h - 40 * k - music;
+        drawMusic(canvas, m, bottom + 22 * k, AL_LEFT, alpha);
+        // Digital clock at bottom-left
+        if (ambientClock != null) {
+            ambientClock.setAlpha(Math.round(242 * alpha));
+            canvas.drawText(clock, m - Ui.leftBearing(ambientClock, clock), bottom - 70 * k, ambientClock);
+        }
+        // Date below the clock
+        if (ambientDate != null) {
+            ambientDate.setAlpha(Math.round(199 * alpha));
+            canvas.drawText(date, m, bottom - 10 * k, ambientDate);
+        }
+        // Weather condition on the right of the date
+        if (ambientWeather != null) {
+            HomeData.Weather wx = data.weather;
+            if (wx != null) {
+                String temp = HomeData.degrees(wx.temp) + "  " + HomeData.condition(wx.code, wx.isDay);
+                float dateW = ambientDate.measureText(date);
+                ambientWeather.setAlpha(Math.round(160 * alpha));
+                canvas.drawText(temp, m + dateW + 24 * k, bottom - 10 * k, ambientWeather);
+            }
+        }
+        // Progress line at the very bottom
+        Slide s = incoming != null ? incoming : current;
+        if (s != null && progressTrack != null) {
+            float lineY = h - 2 * k;
+            float lineH = Math.max(2, 1.5f * k);
+            float pad = 64 * k;
+            progressTrack.setAlpha(Math.round(31 * alpha));
+            canvas.drawRect(pad, lineY, w - pad, lineY + lineH, progressTrack);
+            long elapsed = up - s.startedAt;
+            float progress = Ui.clamp(elapsed / (float) SHOW_MS);
+            progressPaint.setAlpha(Math.round(179 * alpha));
+            canvas.drawRect(pad, lineY, pad + (w - 2 * pad) * progress, lineY + lineH, progressPaint);
+        }
+    }
+
     // MARK: - Without photos: the big clock over the aurora
 
     private void drawFallback(Canvas canvas, long up, float alpha) {
@@ -821,10 +945,8 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
         content.setTranslationY(dy);
         content.setAlpha(alpha);
         content.draw(canvas);
-        if (playingBottom != null) {
-            float bars = NowPlaying.barsWidth(bottomCap) + bottomCap * 0.6f;
-            drawBars(canvas, w / 2f - (bars + playingBottomWidth) / 2 + dx, h - 92 * k + dy, bottomCap, quotePaint.getColor(), alpha);
-        }
+        // The music widget near the bottom, centred under the clock, drifting with it.
+        drawMusic(canvas, w / 2f + dx, h - 92 * k - musicHeight() + dy, AL_CENTER, alpha);
     }
 
     private void drawContent(Canvas c) {
@@ -859,12 +981,8 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
         // Prices near the bottom edge: small white logo + value, all four on one line.
         float cap = Ui.cap(quotePaint), spacing = 56 * k, gap = 10 * k;
         int[] coins = HomeData.active();
-        String[] values = new String[playingBottom != null ? 0 : HomeData.coinCount()];
+        String[] values = new String[musicLine != null ? 0 : HomeData.coinCount()];   // the music widget's place
         float total = spacing * (values.length - 1);
-        if (playingBottom != null) {
-            float bars = NowPlaying.barsWidth(bottomCap) + bottomCap * 0.6f;
-            c.drawText(playingBottom, cx - (bars + playingBottomWidth) / 2 + bars, h - 92 * k, quotePaint);
-        }
         for (int i = 0; i < values.length; i++) {
             values[i] = HomeData.price(data.prices[coins[i]]);
             total += Glyphs.width(getContext(), HomeData.COINS[coins[i]], cap) + gap + quotePaint.measureText(values[i]);

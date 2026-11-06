@@ -300,7 +300,7 @@ final class KeyPage {
     private StringBuilder top() {
         return new StringBuilder(2048).append("<!doctype html><html lang=\"").append(esc(Ui.language))
                 .append("\"><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">")
-                .append("<title>Free My TV</title><style>")
+                .append("<title>apple-tvOS</title><style>")
                 .append("body{margin:0 auto;max-width:34em;padding:24px;font:17px/1.5 system-ui,-apple-system,sans-serif;")
                 .append("background:#1c1c1e;color:#f5f5f7}h1{font-size:24px}li{margin:.3em 0}a{color:#9fd3ff}")
                 .append("textarea{box-sizing:border-box;width:100%;font:15px monospace;padding:10px;border-radius:10px;border:0}")
@@ -308,7 +308,7 @@ final class KeyPage {
                 .append("border-radius:12px;background:#f5f5f7;color:#1c1c1e;font:600 17px system-ui,sans-serif;text-align:center;")
                 .append("text-decoration:none}.b{background:#3a3a3c;color:#f5f5f7}.s{color:#98989d;font-size:15px}")
                 .append(".ok{color:#7ee08a;font-size:20px}.no{color:#ffc266;font-size:20px}</style>")
-                .append("<h1>").append(esc(watchmode ? Ui.tr("Watchmode key") : Ui.tr("TMDB key"))).append(" · Free My TV</h1>");
+                .append("<h1>").append(esc(watchmode ? Ui.tr("Watchmode key") : Ui.tr("TMDB key"))).append(" · apple-tvOS</h1>");
     }
 
     private static byte[] bottom(StringBuilder b) {

@@ -2,7 +2,7 @@ package io.freemytv;
 
 import android.content.ComponentName;
 import android.content.Context;
-import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
@@ -18,9 +18,7 @@ import android.service.notification.NotificationListenerService;
 import android.text.TextUtils;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -53,6 +51,47 @@ public class NowPlaying extends NotificationListenerService {
         }
     }
 
+    /** Where `w` is now, in ms: its last reported position moved on by the time since, at its speed. */
+    static long position(Watch w) {
+        long p = w.position;
+        if (w.speed > 0 && w.positionAt > 0) p += (long) ((SystemClock.elapsedRealtime() - w.positionAt) * w.speed);
+        return Math.max(0, w.duration > 0 ? Math.min(p, w.duration) : p);
+    }
+
+    /** "02:30/04:10" into `sb`. */
+    static void appendTimes(StringBuilder sb, long elapsed, long total) {
+        appendTime(sb, elapsed);
+        sb.append('/');
+        appendTime(sb, total);
+    }
+
+    private static void appendTime(StringBuilder sb, long ms) {
+        long s = ms / 1000, m = s / 60;
+        s %= 60;
+        if (m < 10) sb.append('0');
+        sb.append(m).append(':');
+        if (s < 10) sb.append('0');
+        sb.append(s);
+    }
+
+    /**
+     * The bars following the sound (AudioLevels: bass, mids, treble) when it can be read; else bouncing on their own,
+     * never still.
+     */
+    static void drawBars(Canvas c, float x, float base, float cap, Paint p, AudioLevels audio, RectF r) {
+        if (audio == null || !audio.live()) {
+            drawBars(c, x, base, cap, p, true, r);
+            return;
+        }
+        audio.step();
+        for (int i = 0; i < 3; i++) {
+            float level = 0.2f + 0.8f * audio.level[i];
+            float bx = x + i * cap * 0.42f;
+            r.set(bx, base - cap * level, bx + cap * 0.28f, base);
+            c.drawRoundRect(r, cap * 0.14f, cap * 0.14f, p);
+        }
+    }
+
     static ComponentName component(Context c) {
         return new ComponentName(c, NowPlaying.class);
     }
@@ -75,7 +114,6 @@ public class NowPlaying extends NotificationListenerService {
         private final Runnable changed;
         private final Handler handler = new Handler(Looper.getMainLooper());
         private final List<MediaController> controllers = new ArrayList<>();
-        private final Map<String, String> labels = new HashMap<>();   // some players report every second
         private final MediaController.Callback callback = new MediaController.Callback() {
             @Override public void onPlaybackStateChanged(PlaybackState state) { update(); }
             @Override public void onMetadataChanged(MediaMetadata metadata) { update(); }
@@ -85,6 +123,26 @@ public class NowPlaying extends NotificationListenerService {
         volatile String text;
         /** The title alone (the app's package when it gives none): the line's other parts can change every second. */
         volatile String title;
+        /** The playing media's art (album art or video still), or null. */
+        volatile Bitmap art;
+        /** The artist or subtitle, or null. */
+        volatile String artist;
+        /** The playing app's package name, or null. */
+        volatile String pkg;
+        /** Whether the session looks like music (has an album title or artist, no video size). */
+        volatile boolean music;
+        /** The album name, or null. */
+        volatile String album;
+        /** The playing session's controller: for transport controls. Read on the main thread only. */
+        volatile MediaController controller;
+        /** Duration in ms, or 0. */
+        volatile long duration;
+        /** Last reported position in ms. */
+        volatile long position;
+        /** Playback speed (1 = normal). */
+        volatile float speed;
+        /** SystemClock.elapsedRealtime() when position was last reported. */
+        volatile long positionAt;
 
         Watch(Context c, Runnable changed) {
             context = c;
@@ -108,6 +166,17 @@ public class NowPlaying extends NotificationListenerService {
             }
         }
 
+        /** Every session the apps keep, paused ones too, most recent first (a copy: read it off the main thread). */
+        List<MediaController> sessions() {
+            return new ArrayList<>(controllers);
+        }
+
+        /** The session of `pkg`, playing or not, or null. */
+        MediaController session(String pkg) {
+            for (MediaController mc : controllers) if (mc.getPackageName().equals(pkg)) return mc;
+            return null;
+        }
+
         void stop() {
             if (!on) return;
             on = false;
@@ -129,43 +198,80 @@ public class NowPlaying extends NotificationListenerService {
 
         private void update() {
             String now = null, nowTitle = null;
+            Bitmap nowArt = null;
+            String nowArtist = null, nowPkg = null, nowAlbum = null;
+            boolean nowMusic = false;
+            MediaController nowController = null;
+            long nowDuration = 0, nowPosition = 0, nowPositionAt = 0;
+            float nowSpeed = 1;
             for (MediaController mc : controllers) {   // most recent first
                 PlaybackState s = mc.getPlaybackState();
                 int state = s == null ? PlaybackState.STATE_NONE : s.getState();
-                // A stream that buffers is still playing: the line doesn't blink back to the prices.
                 if (state == PlaybackState.STATE_PLAYING || state == PlaybackState.STATE_BUFFERING
                         || state == PlaybackState.STATE_CONNECTING) {
                     now = describe(mc);
                     MediaMetadata m = mc.getMetadata();
                     CharSequence t = m == null ? null : m.getDescription().getTitle();
                     nowTitle = now == null ? null : TextUtils.isEmpty(t) ? mc.getPackageName() : t.toString().trim();
+                    nowPkg = mc.getPackageName();
+                    nowController = mc;
+                    if (m != null) {
+                        // No DISPLAY_ICON: Spotify puts its app icon there.
+                        nowArt = m.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART);
+                        if (nowArt == null) nowArt = m.getBitmap(MediaMetadata.METADATA_KEY_ART);
+                        // A video's still in the display icon (YouTube's, a player's): the bitmaps only, no link here.
+                        if (nowArt == null && !Recently.isMusic(m)) nowArt = Recently.sessionArt(null, m, false);
+                        // An update for the same song without the art keeps the art it had.
+                        if (nowArt == null && nowTitle != null && nowTitle.equals(title)) nowArt = art;
+                        CharSequence a = m.getText(MediaMetadata.METADATA_KEY_ARTIST);
+                        if (TextUtils.isEmpty(a)) a = m.getText(MediaMetadata.METADATA_KEY_ALBUM_ARTIST);
+                        nowArtist = TextUtils.isEmpty(a) ? null : a.toString().trim();
+                        CharSequence al = m.getText(MediaMetadata.METADATA_KEY_ALBUM);
+                        nowAlbum = TextUtils.isEmpty(al) ? null : al.toString().trim();
+                        nowMusic = Recently.isMusic(m);
+                    }
+                    PlaybackState ps = mc.getPlaybackState();
+                    if (ps != null) {
+                        nowDuration = m == null ? 0 : m.getLong(MediaMetadata.METADATA_KEY_DURATION);
+                        nowPosition = ps.getPosition();
+                        nowSpeed = ps.getPlaybackSpeed();
+                        nowPositionAt = ps.getLastPositionUpdateTime();
+                    }
                     break;
                 }
             }
-            if (Objects.equals(now, text)) return;
+            // Play, pause and seeks keep the title: the position is kept without a redraw (the progress bar reads it).
+            duration = nowDuration;
+            position = nowPosition;
+            speed = nowSpeed;
+            positionAt = nowPositionAt;
+            controller = nowController;
+            // Apps send the title first with a placeholder (their icon), then the real art: a new picture alone is a change.
+            if (Objects.equals(now, text) && sameArt(nowArt, art)) return;
             title = nowTitle;
             text = now;
+            art = nowArt;
+            artist = nowArtist;
+            pkg = nowPkg;
+            album = nowAlbum;
+            music = nowMusic;
             changed.run();
         }
 
-        /** "Title · Artist · App": the parts the app gives, then its name; null when there's none of them. */
+        /** Some apps hand a new Bitmap object for the same picture on every update. */
+        private static boolean sameArt(Bitmap a, Bitmap b) {
+            if (a == b) return true;
+            if (a == null || b == null) return false;
+            return a.getWidth() == b.getWidth() && a.getHeight() == b.getHeight() && a.sameAs(b);
+        }
+
+        /** "Title · Artist": the media's own title and subtitle; null when there's none. */
         private String describe(MediaController mc) {
             List<String> parts = new ArrayList<>();
             MediaMetadata m = mc.getMetadata();
             MediaDescription d = m == null ? null : m.getDescription();
             if (d != null && !TextUtils.isEmpty(d.getTitle())) parts.add(d.getTitle().toString().trim());
             if (d != null && !TextUtils.isEmpty(d.getSubtitle())) parts.add(d.getSubtitle().toString().trim());
-            String app = labels.get(mc.getPackageName());
-            if (app == null) {
-                try {
-                    PackageManager pm = context.getPackageManager();
-                    app = pm.getApplicationLabel(pm.getApplicationInfo(mc.getPackageName(), 0)).toString();
-                } catch (PackageManager.NameNotFoundException e) {
-                    app = "";   // an app without a launcher icon is hidden from us (Android 11+): no name to show
-                }
-                labels.put(mc.getPackageName(), app);
-            }
-            if (!app.isEmpty() && !parts.contains(app)) parts.add(app);
             return parts.isEmpty() ? null : TextUtils.join(" · ", parts);
         }
     }

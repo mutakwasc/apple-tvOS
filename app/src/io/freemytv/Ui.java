@@ -66,7 +66,7 @@ final class Ui {
     static volatile String language = "en";
     /** Bumped when the language changes: text cached by the screens is made again. */
     static volatile int generation;
-    static Typeface thin, light, displayMedium, displaySemibold, regular, medium, semibold;
+    static Typeface thin, light, displayMedium, displaySemibold, regular, medium, semibold, digital;
     private static boolean loaded;
     private static final Rect BOUNDS = new Rect();
     private static final RectF OVAL = new RectF();
@@ -82,6 +82,11 @@ final class Ui {
         regular = font(a, 14, 400);
         medium = font(a, 14, 500);
         semibold = font(a, 14, 600);
+        try {
+            digital = Typeface.createFromAsset(a, "fonts/DSEG7Classic-Regular.ttf");
+        } catch (RuntimeException e) {
+            digital = Typeface.MONOSPACE;
+        }
     }
 
     /** Inter at an optical size (14 = text, 32 = display) and weight; the system font if the file is missing. */
@@ -543,6 +548,22 @@ final class Ui {
     /** "domingo, 18 de outubro" (lowercase, like the iPhone in Portuguese); "Sunday, October 18" in English; "Sonntag, 18. Oktober". */
     static String date(long now) {
         return Ui.datePattern("format|EEEE, MMMM d").format(now);
+    }
+
+    /** Short date for the weather line: "Wed, 4 Nov". */
+    static String shortDate(long now) {
+        return Ui.datePattern("format|EEE, d MMM").format(now);
+    }
+
+    /** Time-based greeting: "Hey! Good Morning", "Hey! Good Afternoon", "Hey! Good Evening". */
+    static String greeting() {
+        int hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+        String g;
+        if (hour >= 5 && hour < 12) g = tr("Good Morning");
+        else if (hour >= 12 && hour < 17) g = tr("Good Afternoon");
+        else if (hour >= 17) g = tr("Good Evening");
+        else g = tr("Good Night");
+        return tr("Hey!") + " " + g;
     }
 
     /** Spinning arc (work in progress). */

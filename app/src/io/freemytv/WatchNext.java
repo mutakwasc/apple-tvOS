@@ -26,8 +26,6 @@ final class WatchNext {
     private WatchNext() {}
 
     static final String PERMISSION = "android.permission.READ_TV_LISTINGS";
-    /** Declared by apps that write the TV's lists (apps can also write their own rows and Watch Next without it). */
-    private static final String WRITE_EPG = "com.android.providers.tv.permission.WRITE_EPG_DATA";
     static final int PER_APP = 2, MAX = 12;
     /** Channel names that mean "continue watching" (apps name their own channel). */
     private static final Set<String> CHANNEL_NAMES = new HashSet<>(java.util.Arrays.asList(
@@ -102,61 +100,6 @@ final class WatchNext {
         return out;
     }
 
-    /**
-     * The apps that can feed Continue Watching (Settings, off the main thread): those allowed to write Android TV's
-     * lists, plus any publishing right now. As {package, name}, sorted by name, without Free My TV.
-     */
-    static List<String[]> sources(Context c) {
-        Set<String> pkgs = new HashSet<>();
-        PackageManager pm = c.getPackageManager();
-        try {
-            for (android.content.pm.PackageInfo p : pm.getInstalledPackages(PackageManager.GET_PERMISSIONS)) {
-                if (p.requestedPermissions == null) continue;
-                for (String perm : p.requestedPermissions) {
-                    if (WRITE_EPG.equals(perm)) { pkgs.add(p.packageName); break; }
-                }
-            }
-        } catch (RuntimeException e) {
-            AppLog.w("continue watching apps: " + e.getMessage());
-        }
-        if (allowed(c)) {
-            ContentResolver cr = c.getContentResolver();
-            packages(cr, TvContract.WatchNextPrograms.CONTENT_URI, TvContract.WatchNextPrograms.COLUMN_PACKAGE_NAME, null, pkgs);
-            // Home screen rows (not the tuner's channels): apps write these, and Watch Next, without any permission.
-            packages(cr, TvContract.Channels.CONTENT_URI, TvContract.Channels.COLUMN_PACKAGE_NAME, TvContract.Channels.COLUMN_TYPE, pkgs);
-        }
-        pkgs.remove(c.getPackageName());
-        // Only apps you can open from the TV: leaves out system pieces (Shell) and home screens (other launchers),
-        // which ask for the permission but have nothing to resume.
-        Set<String> homes = new HashSet<>();
-        for (android.content.pm.ResolveInfo ri : pm.queryIntentActivities(
-                new android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_HOME), 0)) {
-            homes.add(ri.activityInfo.packageName);
-        }
-        List<String[]> out = new ArrayList<>();
-        for (String p : pkgs) {
-            if (homes.contains(p) || HomeApps.launchIntent(pm, p) == null) continue;
-            String name = appName(c, p);
-            out.add(new String[] {p, name.isEmpty() ? p : name});
-        }
-        Collections.sort(out, (a, b) -> a[1].toLowerCase(Locale.ROOT).compareTo(b[1].toLowerCase(Locale.ROOT)));
-        return out;
-    }
-
-    /** The packages in a TvContract table (only preview channels when typeColumn is given). */
-    private static void packages(ContentResolver cr, Uri uri, String column, String typeColumn, Set<String> out) {
-        String[] projection = typeColumn == null ? new String[] {column} : new String[] {column, typeColumn};
-        try (Cursor cur = cr.query(uri, projection, null, null, null)) {
-            if (cur == null) return;
-            while (cur.moveToNext()) {
-                if (typeColumn != null && !TvContract.Channels.TYPE_PREVIEW.equals(cur.getString(1))) continue;
-                String p = cur.isNull(0) ? null : cur.getString(0);
-                if (p != null) out.add(p);
-            }
-        } catch (RuntimeException e) {
-            AppLog.w("continue watching apps " + uri + ": " + e.getMessage());
-        }
-    }
 
     private static String appName(Context c, String pkg) {
         try {

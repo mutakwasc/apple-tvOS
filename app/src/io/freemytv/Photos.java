@@ -47,6 +47,11 @@ final class Photos {
         return new File(c.getFilesDir(), "photos");
     }
 
+    /** Separates downloaded wallpapers from photos the person sent, so a source change never removes theirs. */
+    static File onlineDir(Context c) {
+        return new File(c.getFilesDir(), "online-photos");
+    }
+
     /** Where tools/photos.py puts them (the app's own external folder: adb can write there, and no permission). */
     private static File inbox(Context c) {
         return c.getExternalFilesDir("photos");
@@ -78,33 +83,57 @@ final class Photos {
     // MARK: - The imported photos
 
     private static long listedStamp = -1;
+    private static long listedOnlineStamp = -1;
     private static List<File> listed = new ArrayList<>();
 
     /** The imported photos, in the order they came (one stat of the folder while nothing changed). */
     static synchronized List<File> files(Context c) {
         File d = dir(c);
+        File online = onlineDir(c);
         long stamp = d.exists() ? d.lastModified() : 0;
-        if (stamp != listedStamp) {
+        long onlineStamp = online.exists() ? online.lastModified() : 0;
+        if (stamp != listedStamp || onlineStamp != listedOnlineStamp) {
             List<File> out = new ArrayList<>();
-            File[] all = d.listFiles();
-            if (all != null) for (File f : all) if (f.getName().endsWith(".jpg")) out.add(f);
-            Collections.sort(out);
+            for (File folder : new File[] {d, online}) {
+                File[] all = folder.listFiles();
+                if (all != null) for (File f : all) if (f.getName().endsWith(".jpg")) out.add(f);
+            }
+            Collections.sort(out, (a, b) -> a.getName().compareTo(b.getName()));
             listed = out;
             listedStamp = stamp;
+            listedOnlineStamp = onlineStamp;
         }
         return listed;
     }
 
-    /** On in Home Settings and something imported. */
-    static boolean on(Context c) {
-        return Prefs.photos() && !files(c).isEmpty();
+    /** The downloaded web wallpapers (Gallery), in name order. */
+    private static List<File> webFiles(Context c) {
+        List<File> out = new ArrayList<>();
+        File[] all = onlineDir(c).listFiles();
+        if (all != null) for (File f : all) if (f.getName().endsWith(".jpg")) out.add(f);
+        Collections.sort(out, (a, b) -> a.getName().compareTo(b.getName()));
+        return out;
     }
 
-    /** For the screensaver: the photos as picks (no title, no caption). */
+    /**
+     * For the screensaver's Custom style: your own photos (sent from a computer, or from Immich) as picks, without a
+     * title or caption; not the web wallpapers, which are the home screen's.
+     */
     static List<Recs.Pick> picks(Context c) {
+        List<File> list = new ArrayList<>();
+        File[] all = dir(c).listFiles();
+        if (all != null) for (File f : all) if (f.getName().endsWith(".jpg")) list.add(f);
+        Collections.sort(list, (a, b) -> a.getName().compareTo(b.getName()));
+        return asPicks(list);
+    }
+
+    /** For the screensaver's Ambient style: the web wallpapers (Gallery's downloads), as the Web wallpaper uses them. */
+    static List<Recs.Pick> webPicks(Context c) {
+        return asPicks(webFiles(c));
+    }
+
+    private static List<Recs.Pick> asPicks(List<File> list) {
         List<Recs.Pick> out = new ArrayList<>();
-        if (!on(c)) return out;
-        List<File> list = files(c);
         for (int i = 0; i < list.size(); i++) {
             Recs.Pick p = new Recs.Pick();
             p.kind = "photo";
@@ -123,16 +152,17 @@ final class Photos {
     private static Backdrop backdrop;
 
     /**
-     * This hour's photo, ready to draw as the home screen's background, or null (off, or the first one still being
-     * built). When the hour changes, the previous one stays until the new one is ready; then `ready` runs.
+     * With Wallpaper on Web, this hour's web picture, ready to draw as the home screen's background, or null (another
+     * wallpaper, none downloaded yet, or the first one still being built). Your own photos are the screensaver's only.
+     * When the hour changes, the previous one stays until the new one is ready; then `ready` runs.
      */
     static synchronized Backdrop backdrop(Context c, Runnable ready) {
-        if (!on(c)) {
+        List<File> list = "web".equals(Prefs.wallpaper()) ? webFiles(c) : Collections.<File>emptyList();
+        if (list.isEmpty()) {
             backdrop = null;
             built = null;
             return null;
         }
-        List<File> list = files(c);
         File want = list.get((int) ((System.currentTimeMillis() / 3_600_000L) % list.size()));
         if (!want.equals(built) && !want.equals(building)) {
             building = want;
@@ -140,7 +170,7 @@ final class Photos {
                 Backdrop b = null;
                 try {
                     Bitmap src = BitmapFactory.decodeFile(want.getPath());
-                    if (src != null) b = Backdrop.make(src, true, true);
+                    if (src != null) b = Backdrop.wallpaper(src);
                 } catch (RuntimeException | OutOfMemoryError e) {
                     AppLog.w("photos: background from " + want.getName() + ": " + e.getMessage());
                 }
@@ -222,8 +252,7 @@ final class Photos {
         }
         // Counted on disk, not from files(): its cache is keyed on the folder's time, which another process's import
         // (or two within the same second) may not move.
-        File[] imported = d.listFiles((dir, name) -> name.endsWith(".jpg"));
-        int have = imported == null ? 0 : imported.length, count = 0;
+        int have = count(c), count = 0;
         for (File sent : all) {
             if (!sent.isFile()) continue;
             String name = sent.getName();
@@ -251,12 +280,18 @@ final class Photos {
                 if (b == null) {
                     AppLog.w("photos: skipped " + original + " (too small or unreadable)");
                 } else {
-                    try (OutputStream os = new FileOutputStream(part)) {
-                        b.compress(Bitmap.CompressFormat.JPEG, 86, os);
+                    synchronized (Photos.class) {
+                        if (count(c) >= MAX) {
+                            AppLog.w("photos: " + MAX + " already, " + original + " waits");
+                        } else {
+                            try (OutputStream os = new FileOutputStream(part)) {
+                                if (!b.compress(Bitmap.CompressFormat.JPEG, 86, os)) throw new IOException("can't encode " + original);
+                            }
+                            if (!part.renameTo(out)) throw new IOException("can't name " + out.getName());
+                            count++;
+                        }
                     }
                     b.recycle();
-                    if (!part.renameTo(out)) throw new IOException("can't name " + out.getName());
-                    count++;
                 }
             } catch (IOException | RuntimeException | OutOfMemoryError e) {
                 part.delete();
@@ -282,8 +317,69 @@ final class Photos {
 
     /** Imported photos on disk (not files(): its cache may not have seen an import in this same second). */
     static int count(Context c) {
-        File[] all = dir(c).listFiles((d, name) -> name.endsWith(".jpg"));
-        return all == null ? 0 : all.length;
+        int count = 0;
+        for (File folder : new File[] {dir(c), onlineDir(c)}) {
+            File[] all = folder.listFiles((d, name) -> name.endsWith(".jpg"));
+            if (all != null) count += all.length;
+        }
+        return count;
+    }
+
+    /** The downloaded photos from one provider, newest first. */
+    static List<File> onlineFiles(Context c, String source) {
+        File[] all = onlineDir(c).listFiles((d, name) -> name.contains("-" + source + "-") && name.endsWith("-online.jpg"));
+        List<File> out = new ArrayList<>(all == null ? Collections.<File>emptyList() : Arrays.asList(all));
+        Collections.sort(out, (a, b) -> b.getName().compareTo(a.getName()));
+        return out;
+    }
+
+    static boolean hasOnline(Context c, String source, String id) {
+        File f = new File(onlineDir(c), source + "-" + id + "-online.jpg");
+        File[] all = onlineDir(c).listFiles((d, name) -> name.contains("-" + source + "-" + id + "-") && name.endsWith("-online.jpg"));
+        return f.isFile() || (all != null && all.length > 0);
+    }
+
+    /** Decodes a downloaded image through the same safe crop/resize as personal photos. */
+    static synchronized boolean importOnline(Context c, File src, String source, String id) throws IOException {
+        if (!source.matches("bing|spotlight|wikimedia|openverse") || !id.matches("[A-Za-z0-9_-]{1,80}")) {
+            throw new IOException("invalid online photo name");
+        }
+        if (hasOnline(c, source, id)) return false;
+        File folder = onlineDir(c);
+        if (!folder.isDirectory() && !folder.mkdirs()) throw new IOException("can't create " + folder);
+        if (count(c) >= MAX) {
+            List<File> oldest = onlineFiles(c, source);
+            if (oldest.isEmpty()) return false;
+            oldest.get(0).delete();
+        }
+        Bitmap b;
+        try {
+            b = decode(src, W, H);
+        } catch (RuntimeException | OutOfMemoryError e) {
+            throw new IOException("can't decode online photo", e);
+        }
+        if (b == null) throw new IOException("online photo is too small or unreadable");
+        File out = new File(folder, String.format(Locale.US, "%013d-%s-%s-online.jpg",
+                System.currentTimeMillis(), source, id));
+        File part = new File(folder, out.getName() + ".part");
+        try (OutputStream os = new FileOutputStream(part)) {
+            if (!b.compress(Bitmap.CompressFormat.JPEG, 86, os)) throw new IOException("can't encode online photo");
+        } finally {
+            b.recycle();
+        }
+        if (!part.renameTo(out)) {
+            part.delete();
+            throw new IOException("can't save online photo");
+        }
+        return true;
+    }
+
+    /** Removes only downloaded wallpaper images; personal photos and Immich's stay untouched. */
+    static void removeOnline(Context c) {
+        synchronized (Photos.class) {
+            clear(onlineDir(c));
+            listedOnlineStamp = -1;
+        }
     }
 
     /** The photos ImmichPhotos brought, oldest first; tools/photos.py's are never among them. */
@@ -303,25 +399,6 @@ final class Photos {
         }
     }
 
-    /** Takes Immich's away (and what of it still waits), keeping tools/photos.py's. */
-    static void removeImmich(Context c) {
-        for (File f : fromImmich(c)) f.delete();
-        File[] waiting = privateInbox(c).listFiles((d, name) -> name.contains(IMMICH));
-        if (waiting != null) for (File f : waiting) f.delete();
-    }
-
-    /** Deletes the imported photos and whatever is still waiting, half-sent ones included. */
-    static void removeAll(Context c) {
-        clear(dir(c));
-        clear(privateInbox(c));
-        File in = inbox(c);
-        File[] queued = in == null ? null : in.listFiles();
-        if (queued != null) for (File f : queued) f.delete();
-        synchronized (Photos.class) {
-            backdrop = null;
-            built = null;
-        }
-    }
 
     private static boolean image(String name) {
         return name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png") || name.endsWith(".webp")

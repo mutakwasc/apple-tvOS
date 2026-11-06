@@ -86,7 +86,7 @@ final class HomeMode {
 
     /** What the settings and the refused switch say on a phone. */
     static String phoneText() {
-        return Ui.tr("Free My TV is a TV app: install this APK on your Android TV or Google TV (freemytv.io), not on a phone.");
+        return Ui.tr("apple-tvOS is a TV app: install this APK on your Android TV or Google TV (freemytv.io), not on a phone.");
     }
 
     /** Classic Android TV's home screen; its recommendations service crashes on the screensaver while it's off (#11). */
@@ -520,7 +520,7 @@ final class HomeMode {
     private static void applyFree(Context c) {
         JSONObject s = state(c);
         if (AMAZON) {
-            done(c, Ui.tr("On Fire TV the Home button belongs to Amazon's home screen. Free My TV stays an app here: open it from your apps."));
+            done(c, Ui.tr("On Fire TV the Home button belongs to Amazon's home screen. apple-tvOS stays an app here: open it from your apps."));
             return;
         }
         if (BRICKS) {
@@ -643,19 +643,19 @@ final class HomeMode {
                 }
             }
             wakeWatch(adb, true);
-            notice(c, Ui.trf("Free My TV is on: new home screen and screensaver, {n} apps turned off.", "n", disabled.size()));
-            busy(c, Ui.tr("Measuring Free My TV…"));
+            notice(c, Ui.trf("apple-tvOS is on: new home screen and screensaver, {n} apps turned off.", "n", disabled.size()));
+            busy(c, Ui.tr("Measuring apple-tvOS…"));
             measure(c, adb, FREE, false);
             done(c, null);
             homeAfter(adb);
             ModeJob.schedule(c, ModeJob.MEMORY, FREE, 120_000);
         } catch (Exception e) {
-            done(c, Ui.trf("Couldn't turn on Free My TV: {error}", "error", e.getMessage()));
+            done(c, Ui.trf("Couldn't turn on apple-tvOS: {error}", "error", e.getMessage()));
         }
     }
 
     static String bricksText() {
-        return Ui.tr("On this TV model, switching the home screen kept a TV from starting. Free My TV stays an app here: open it from your apps.");
+        return Ui.tr("On this TV model, switching the home screen kept a TV from starting. apple-tvOS stays an app here: open it from your apps.");
     }
 
     private static void applyOriginal(Context c) {
@@ -825,7 +825,7 @@ final class HomeMode {
                 }
                 s.put("homeReverted", true).put("disabled", kept);
                 save(app, s);
-                notice(app, Ui.tr("Free My TV's home screen crashed 3 times in a row; I switched back to the original one."));
+                notice(app, Ui.tr("apple-tvOS's home screen crashed 3 times in a row; I switched back to the original one."));
                 adb.shell("am start -a android.intent.action.MAIN -c android.intent.category.HOME");
             } catch (Exception e) {
                 AppLog.w("could not give the home screen back: " + e.getMessage());
@@ -851,7 +851,7 @@ final class HomeMode {
             if (!FREE.equals(s.optString("mode")) || AMAZON) return;
             if (BRICKS) {
                 // Switched by a version that still allowed it here: the TV's own home screen back before the next restart.
-                AppLog.w("Free My TV mode where the switch kept a TV from starting: back to Original");
+                AppLog.w("apple-tvOS mode where the switch kept a TV from starting: back to Original");
                 applyOriginal(app);
                 notice(app, bricksText());
                 return;
@@ -989,14 +989,14 @@ final class HomeMode {
                 if (theirs) latest.put("keptOff", new JSONArray(keptOff));
                 save(app, latest);
             } catch (Exception e) {
-                notice(app, Ui.trf("Couldn't check Free My TV: {error}", "error", e.getMessage()));
+                notice(app, Ui.trf("Couldn't check apple-tvOS: {error}", "error", e.getMessage()));
                 return;
             }
             if (!fixed.isEmpty()) {
                 notice(app, updated ? Ui.trf("The TV update turned back on {list}.", "list", String.join(", ", fixed))
                         : Ui.trf("Turned off what was missing: {list}.", "list", String.join(", ", fixed)));
             } else if (updated) {
-                notice(app, Ui.tr("The TV was updated; Free My TV is still on."));
+                notice(app, Ui.tr("The TV was updated; apple-tvOS is still on."));
             }
         }
     }
@@ -1147,6 +1147,37 @@ final class HomeMode {
             } catch (IOException e) {
                 AppLog.w("continue watching permission: " + e.getMessage());
             }
+        }
+    }
+
+    // MARK: - When the screensaver starts (Home Settings > Screensaver > Time)
+
+    /** The waits offered, in ms: 30 s to 5 minutes. */
+    static final int[] SAVER_TIMES = {30_000, 60_000, 120_000, 180_000, 300_000};
+
+    /**
+     * Android starts the screensaver after the screen's idle timeout (Settings.System.SCREEN_OFF_TIMEOUT), which only the
+     * system's own settings app may write: through the TV's ADB, as a job, and only one of the offered values.
+     */
+    static void setSaverTime(Context c, int ms) {
+        ModeJob.schedule(c, ModeJob.SAVER_TIME, String.valueOf(ms), 0);
+    }
+
+    static void saverTimeNow(Context app, String value) {
+        int ms;
+        try {
+            ms = Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return;
+        }
+        boolean offered = false;
+        for (int t : SAVER_TIMES) offered |= t == ms;
+        if (!offered) return;
+        try (Adb adb = Adb.connect(app, 8_000, null)) {
+            adb.shell("settings put system screen_off_timeout " + ms);
+            AppLog.w("screensaver after " + ms / 1000 + " s");
+        } catch (IOException e) {
+            AppLog.w("screensaver time: " + e.getMessage());
         }
     }
 

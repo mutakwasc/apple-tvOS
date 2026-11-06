@@ -11,16 +11,24 @@ import android.view.KeyEvent;
  */
 public class Screensaver extends DreamService {
     private DreamView view;
+    private CozyView cozy;   // Cozy Nights instead of the photos
 
     @Override public void onAttachedToWindow() {
         super.onAttachedToWindow();
         Watchdog.install(this);
         Ui.init(this);
-        setInteractive(Prefs.saverWatch());   // interactive: the keys come here instead of waking the TV
+        boolean fireplace = "cozy".equals(Prefs.saverStyle());
+        // Interactive: the keys come here instead of waking the TV (OK opens the title on screen; Cozy Nights has none).
+        setInteractive(Prefs.saverWatch() && !fireplace);
         setFullscreen(true);
         setScreenBright(true);
-        view = new DreamView(this);
-        setContentView(view);
+        if (fireplace) {
+            cozy = new CozyView(this);
+            setContentView(cozy);
+        } else {
+            view = new DreamView(this);
+            setContentView(view);
+        }
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
@@ -38,15 +46,18 @@ public class Screensaver extends DreamService {
     @Override public void onDreamingStarted() {
         super.onDreamingStarted();
         if (view != null) view.start();
+        if (cozy != null) cozy.start();
     }
 
     @Override public void onDreamingStopped() {
         if (view != null) view.stop();
+        if (cozy != null) cozy.stop();
         super.onDreamingStopped();
     }
 
     @Override public void onDetachedFromWindow() {
         if (view != null) view.stop();
+        if (cozy != null) cozy.stop();
         super.onDetachedFromWindow();
     }
 }

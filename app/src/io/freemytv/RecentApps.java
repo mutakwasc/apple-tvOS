@@ -206,7 +206,7 @@ final class RecentApps {
         } catch (IOException | RuntimeException e) {   // a crash here would take the home screen down (and count for the watchdog)
             AppLog.w("recent apps: " + e);
             found.clear();
-            error = Ui.tr("Couldn't read the recent apps. Allow USB debugging for Free My TV.");
+            error = Ui.tr("Couldn't read the recent apps. Allow USB debugging for apple-tvOS.");
         }
         final String shownError = error;
         activity.runOnUiThread(() -> {

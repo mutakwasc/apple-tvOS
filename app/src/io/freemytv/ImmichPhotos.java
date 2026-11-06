@@ -60,57 +60,6 @@ final class ImmichPhotos {
         return !key.isEmpty();
     }
 
-    /** An album with photos in it: what My Photos can show. */
-    static final class Album {
-        final String id, name;
-
-        Album(String id, String name) {
-            this.id = id;
-            this.name = name;
-        }
-    }
-
-    /** The server's albums with photos, once loadAlbums has read them (empty before). */
-    static volatile java.util.List<Album> albums = new java.util.ArrayList<>();
-
-    /** Reads the albums in the background; `done` runs on the main thread when they're in. */
-    static void loadAlbums(Context c, Runnable done) {
-        if (!configured(c)) return;
-        WORKER.execute(() -> {
-            try {
-                JSONArray all = new JSONArray(request("/api/albums", null));
-                java.util.List<Album> out = new java.util.ArrayList<>();
-                for (int i = 0; i < all.length(); i++) {
-                    JSONObject a = all.getJSONObject(i);
-                    if (a.optInt("assetCount") > 0) out.add(new Album(a.optString("id"), a.optString("albumName")));
-                }
-                java.util.Collections.sort(out, (x, y) -> x.name.compareToIgnoreCase(y.name));
-                albums = out;
-                if (done != null) MAIN.post(done);
-            } catch (Exception e) {
-                AppLog.w("immich albums: " + e.getMessage());
-            }
-        });
-    }
-
-    /**
-     * My Photos' source changed (Home Settings): a new choice comes at the next home screen, and Immich's photos from
-     * before go as it comes. Default (none of yours) takes Immich's away now; tools/photos.py's always stay.
-     */
-    static void sourceChanged(Context c) {
-        Context app = c.getApplicationContext();
-        //noinspection ResultOfMethodCallIgnored
-        new File(app.getFilesDir(), "immich-sync").delete();
-        boolean mine = !"default".equals(Prefs.photoSource());
-        long at = System.currentTimeMillis();
-        // On the worker, after a sync under way: what that one brings is the previous source's too
-        WORKER.execute(() -> {
-            if (mine) touch(changed(app), at);
-            else Photos.removeImmich(app);
-        });
-        Prefs.setPhotos(mine);
-    }
-
     /** Its time is when the source last changed (absent: no previous source's photos to replace). */
     private static File changed(Context app) {
         return new File(app.getFilesDir(), "immich-source");
@@ -118,7 +67,8 @@ final class ImmichPhotos {
 
     /** Starts a sync in the background when one is due (and My Photos is on); `ready` runs on the main thread after. */
     static void syncIfDue(Context c, Runnable ready) {
-        if (!configured(c) || !Prefs.photos() || "default".equals(Prefs.photoSource()) || running) return;
+        String source = Prefs.photoSource();
+        if (!configured(c) || !Prefs.photos() || !("immich".equals(source) || "album".equals(source)) || running) return;
         Context app = c.getApplicationContext();
         File stamp = new File(app.getFilesDir(), "immich-sync");
         if (Math.abs(System.currentTimeMillis() - stamp.lastModified()) < EVERY_MS) return;   // 0 when never

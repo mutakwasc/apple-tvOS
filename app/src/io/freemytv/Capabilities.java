@@ -29,13 +29,13 @@ final class Capabilities {
     static String missing(Context c, String need) {
         switch (need) {
             case NEED_ADB:
-                return adb(c) ? null : Ui.tr("Needs Free My TV mode: turn it on in Home Screen.");
+                return adb(c) ? null : Ui.tr("Needs apple-tvOS mode: turn it on in Home Screen.");
             case NEED_REMOTE_BUTTONS:
-                return remoteButtons() ? null : Ui.tr("This TV's remote has no app buttons that Free My TV knows.");
+                return remoteButtons() ? null : Ui.tr("This TV's remote has no app buttons that apple-tvOS knows.");
             case NEED_OVERLAY:
                 return overlay(c) ? null : Ui.tr("This TV doesn't let apps show over other apps: the time left shows on the home screen.");
             case NEED_LISTENER:
-                return !adb(c) ? Ui.tr("Needs Free My TV mode: turn it on in Home Screen.")
+                return !adb(c) ? Ui.tr("Needs apple-tvOS mode: turn it on in Home Screen.")
                         : refused(c, LISTENER) ? Ui.tr("This TV doesn't let apps see what's playing.") : null;
             case NEED_HOME_ASSISTANT:
                 return !HomeAssistant.hasEntities()

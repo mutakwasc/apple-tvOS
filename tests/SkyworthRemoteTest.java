@@ -29,6 +29,13 @@ public final class SkyworthRemoteTest {
         for (int key : new int[] {3, 4, 19, 20, 21, 22, 23, 24, 25, 26, 176, 178, 201, 202, 203}) {
             check(!SkyworthRemote.settings(key), "settings mapping leaves unrelated key native: " + key);
         }
+        check(SkyworthRemote.googleTv("skyworth", "SWTV-22AE"), "Skyworth Google TV set");
+        check(SkyworthRemote.googleTv("SKYWORTH", "SWTV-22AE"), "Google TV maker casing");
+        check(!SkyworthRemote.googleTv("skyworth", "SWTV-22AF"), "other Skyworth model untouched");
+        check(!SkyworthRemote.googleTv("skyworth", "JVC G24 TV"), "JVC G24 keeps its own mapping");
+        check(!SkyworthRemote.googleTv("TCL", "SWTV-22AE"), "other manufacturer untouched");
+        check(!(SkyworthRemote.googleTv("skyworth", "JVC G24 TV") && SkyworthRemote.supported("skyworth", "JVC",
+                "JVC G24 TV", 30)), "the two Skyworth mappings never apply together");
         System.out.println("SkyworthRemote: " + assertions + " assertions passed");
     }
 }

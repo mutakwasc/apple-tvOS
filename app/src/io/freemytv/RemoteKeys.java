@@ -29,6 +29,7 @@ import android.view.KeyEvent;
  * On Google TV Streamer, YouTube and the custom star button go to that home app too; Netflix goes to Google's service.
  * On the JVC G24 (Skyworth Android 11), the input shortcut's vendor receiver crashes without Google TV's content
  * provider, and Quick Settings targets its disabled notification panel. Open the native TV menus directly.
+ * On Skyworth's Google TV set (SWTV-22AE), the gear opens our quick panel and the four colour buttons what was picked.
  */
 final class RemoteKeys {
     private RemoteKeys() {}
@@ -45,6 +46,8 @@ final class RemoteKeys {
     static final boolean GOOGLE_STREAMER = is("Google") && Build.MODEL.equals("Google TV Streamer");
     static final boolean JVC_SKYWORTH = SkyworthRemote.supported(Build.MANUFACTURER, Build.BRAND,
             Build.MODEL, Build.VERSION.SDK_INT);
+    /** Skyworth's Google TV set: the gear (our quick panel by default) and the four colour buttons (SkyworthRemote). */
+    static final boolean SKYWORTH_GTV = SkyworthRemote.googleTv(Build.MANUFACTURER, Build.MODEL);
     /**
      * Xiaomi TVs whose remote has a Home button and hands every app button to Xiaomi's receiver, which stays on
      * (MiTV-AXSO2, Amlogic, Android TV 11 tested): only the PatchWall button (BUTTON_5) is ours, left to the TV until an
@@ -70,7 +73,7 @@ final class RemoteKeys {
     private static long lastDown;
 
     static boolean supported() {
-        return TCL || STEM_NETFLIX || KTC || SONY || XIAOMI || HISENSE || GOOGLE_STREAMER || JVC_SKYWORTH;
+        return TCL || STEM_NETFLIX || KTC || SONY || XIAOMI || HISENSE || GOOGLE_STREAMER || JVC_SKYWORTH || SKYWORTH_GTV;
     }
 
     /** The key service is on only where the filter is safe, and while a button opens something (else it has no work). */
@@ -124,9 +127,9 @@ final class RemoteKeys {
                     : JVC_SKYWORTH && pkg.equals(Prefs.TV_SHORTCUTS)
                     ? new Intent(Intent.ACTION_MAIN).setClassName("com.smartdevice.dailyshortcut",
                             "com.smartdevice.dailyshortcut.ui.MainActivity")
-                    : TCL && pkg.equals(Prefs.QUICK_PANEL)
+                    : (TCL || SKYWORTH_GTV) && pkg.equals(Prefs.QUICK_PANEL)
                     ? new Intent(c, QuickPanelActivity.class)
-                    : (JVC_SKYWORTH || TCL) && pkg.equals("com.android.tv.settings")
+                    : (JVC_SKYWORTH || TCL || SKYWORTH_GTV) && pkg.equals("com.android.tv.settings")
                     ? new Intent(android.provider.Settings.ACTION_SETTINGS).setPackage(pkg)
                     : launchIntent(c.getPackageManager(), pkg);
             if (pkg.equals(Prefs.ALL_APPS)) intent.putExtra(HomeActivity.EXTRA_ALL_APPS, true);

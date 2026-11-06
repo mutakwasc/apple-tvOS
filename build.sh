@@ -57,7 +57,7 @@ else
   CURRENCY="$(prop currency USD)"
 fi
 ASSIST=false; [ "$(prop disable_assistant false)" = "true" ] && ASSIST=true
-CRYPTO=false; [ "$(prop show_crypto true)" = "true" ] && CRYPTO=true
+CRYPTO=false; [ "$(prop show_crypto false)" = "true" ] && CRYPTO=true
 ANIMATION=false; [ "$(prop hide_animation false)" = "true" ] && ANIMATION=true
 SAVER=true; [ "$(prop screensaver true)" = "false" ] && SAVER=false
 STREMIO=false; [ "$(prop open_in_stremio false)" = "true" ] && STREMIO=true
@@ -218,8 +218,24 @@ apksigner() {
   if [ -n "$BAT" ]; then "$JAVA" -jar "$BT/lib/apksigner.jar" "$@"
   else "$BT/apksigner" "$@"; fi
 }
-"$JAVAC" -nowarn -Xlint:-options -source 8 -target 8 -bootclasspath "$AJ$CPSEP$BT/core-lambda-stubs.jar" -classpath "$AJ" \
-  -encoding UTF-8 -d out/classes $(find app/src out/gen -name '*.java')
+# On Windows (Git Bash / MSYS2), javac's bootclasspath with ";" is mangled on the command line: use an @argfile.
+{
+  echo "-nowarn"
+  echo "-Xlint:-options"
+  echo "-source"; echo "8"
+  echo "-target"; echo "8"
+  echo "-bootclasspath"
+  case "$BAT" in
+    .bat) printf '%s\n' "$(cygpath -w "$AJ")$CPSEP$(cygpath -w "$BT/core-lambda-stubs.jar")" ;;
+    *)    echo "$AJ$CPSEP$BT/core-lambda-stubs.jar" ;;
+  esac
+  echo "-classpath"
+  case "$BAT" in .bat) cygpath -w "$AJ" ;; *) echo "$AJ" ;; esac
+  echo "-encoding"; echo "UTF-8"
+  echo "-d"; echo "out/classes"
+  find app/src out/gen -name '*.java'
+} > out/javac_args.txt
+"$JAVAC" @out/javac_args.txt
 d8 --release --min-api 26 --lib "$AJ" --output out $(find out/classes -name '*.class')
 if command -v zip >/dev/null; then (cd out && zip -qj base.apk classes.dex)
 else "${JAVA_HOME:+$JAVA_HOME/bin/}jar" -u -M -f out/base.apk -C out classes.dex; fi # Git Bash has no zip
